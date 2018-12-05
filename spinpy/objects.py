@@ -1,8 +1,10 @@
 import spinpy
 import sympy as sym
+from sympy.physics.quantum import TensorProduct
 import numpy as np
 import qutip as qu
 from sympy.physics.quantum import *
+from math import factorial
 import pdb
 
 class Hamiltonian:
@@ -12,6 +14,7 @@ class Hamiltonian:
     ** N, int: Number of qubits
     ** s, float: Spin quantum number (integer or half-integer) (currently, only s=0.5 and s=1 are supported)
     ** include_dipole, Boolean: if True, include dipole-dipole interaction terms (default: True)
+    ** omega_d: Driving frequency, MHz (default: 2870 MHz)
 
     == ATTRIBUTES ==
     ** omega_d: Driving frequency, MHz
@@ -43,19 +46,19 @@ class Hamiltonian:
         # Define constants
         ge = 2.8 # Gyromagnetic ratio of electron, MHz Gauss^-1
         Delta = 2870 # Splitting, MHz (vary this later)
-        Bz = 2870/2.8 # DC z magnetic field, Gauss (vary this later)
+        Bz = 1 # DC z magnetic field, Gauss (vary this later)
         # Keep units consistent in the future
 
         Delta_arr = Delta * np.ones(N) # Array of splittings (in case we want to vary)
-        Bz_arr = Bz * np.ones(N) # Array of Bz
+        Bz_arr = Bz*np.ones(N)#Bz * np.ones(N) # Array of Bz
 
         # Define array of position tuples (in future versions, make this specify-able or something)
         pos_arr = list(zip(np.random.uniform(-10,10,N),np.random.uniform(-10,10,N),np.random.uniform(-10,10,N)))
 
         # Generate lists of the spin operators for specific qubits
-        self.__Sx_arr = np.array([])
-        self.__Sy_arr = np.array([])
-        self.__Sz_arr = np.array([])
+        self.__Sx_arr = []
+        self.__Sy_arr = []
+        self.__Sz_arr = []
 
         for ii in range(N): # ii is the qubit the spin operator is for
             for jj in range(N): # jj is the qubit you're evaluating the operator at
@@ -65,31 +68,45 @@ class Hamiltonian:
                         Sy_oper = spin_operator(s, 'y')
                         Sz_oper = spin_operator(s, 'z')
                     else:
-                        Sx_oper = np.identity(int(2*s+1))
-                        Sy_oper = np.identity(int(2*s+1))
-                        Sz_oper = np.identity(int(2*s+1))
+                        Sx_oper = sym.eye(int(2*s+1))#np.identity(int(2*s+1))
+                        Sz_oper = sym.eye(int(2*s+1))#np.identity(int(2*s+1))
+                        Sy_oper = sym.eye(int(2*s+1))#np.identity(int(2*s+1))
                 else:
                     if ii == jj:
-                        Sx_oper = np.kron(Sx_oper, Sx)#qu.tensor(Sx_oper, Sx)
-                        Sy_oper = np.kron(Sy_oper, Sy)
-                        Sz_oper = np.kron(Sz_oper, Sz)
+                        Sx_oper = TensorProduct(Sx_oper, sym.eye(int(2*s+1)))#np.kron(Sx_oper, Sx)#qu.tensor(Sx_oper, Sx)
+                        Sy_oper = TensorProduct(Sy_oper, sym.eye(int(2*s+1)))#np.kron(Sy_oper, Sy)
+                        Sz_oper = TensorProduct(Sz_oper, sym.eye(int(2*s+1)))#np.kron(Sz_oper, Sz)
                     else:
-                        Sx_oper = np.kron(Sx_oper, Id)
-                        Sy_oper = np.kron(Sy_oper, Id)
-                        Sz_oper = np.kron(Sz_oper, Id)
+                        Sx_oper = TensorProduct(Sx_oper, sym.eye(int(2*s+1)))#np.kron(Sx_oper, Id)
+                        Sy_oper = TensorProduct(Sy_oper, sym.eye(int(2*s+1)))#np.kron(Sy_oper, Id)
+                        Sz_oper = TensorProduct(Sz_oper, sym.eye(int(2*s+1)))#np.kron(Sz_oper, Id)
 
-            self.__Sx_arr = np.append(self.__Sx_arr, Sx_oper)
-            self.__Sy_arr = np.append(self.__Sy_arr, Sy_oper)
-            self.__Sz_arr = np.append(self.__Sz_arr, Sz_oper)
+            self.__Sx_arr.append(Sx_oper) #= #np.append(self.__Sx_arr, Sx_oper)
+            self.__Sy_arr.append(Sy_oper) #= #np.append(self.__Sy_arr, Sy_oper)
+            self.__Sz_arr.append(Sz_oper) #= #np.append(self.__Sz_arr, Sz_oper)
+
+        Sz_scaled = self.__Sz_arr
 
         # Include 2 * N spin-1 splitting terms
-        if s == 0.5:
-            H = ge * Bz_arr * self.__Sz_arr
-        if s == 1:
-            H = Delta_arr * self.__Sz_arr ** 2 + ge * Bz_arr * self.__Sz_arr
-        H = np.sum(H)
+        for ii in range(len(Sz_scaled)):
+            if s == 0.5:
+                Sz_scaled[ii] = ge * Bz_arr * Sz_scaled[ii]
+            if s == 1:
+                Sz_scaled[ii] = Delta_arr * Sz_scaled[ii] ** 2 + ge * Bz_arr * Sz_scaled[ii]
+
+        # Add up matrices to get H
+        for ii in range(len(Sz_scaled)):
+            if ii == 0:
+                H = Sz_scaled[ii]
+            else:
+                H += Sz_scaled[ii]
 
         # If desired, include dipole-dipole interaction terms
+
+        # NOTE: Convert dipole moments to RWA at some later time
+        # Hard code in a single moment for everything, but NOTE let this change later on.
+        m = 100
+
         if include_dipole:
             for ii in range(N):
                 for jj in range(ii - 1):
@@ -102,8 +119,9 @@ class Hamiltonian:
                     Sj_dot_r = self.__Sx_arr[jj]*rvec[0] + self.__Sy_arr[jj]*rvec[1] + self.__Sz_arr[jj]*rvec[2]
                     Si_dot_Sj = self.__Sx_arr[ii]*self.__Sx_arr[jj] + self.__Sy_arr[ii]*self.__Sy_arr[jj] + self.__Sz_arr[ii]*self.__Sz_arr[jj]
 
-                    H += -3 * Si_dot_r * Sj_dot_r / r ** 5 + Si_dot_Sj / r ** 3
+                    H += -3 * m * Si_dot_r * Sj_dot_r / r ** 5 + m * Si_dot_Sj / r ** 3
 
+        #pdb.set_trace()
         self.__operator = H
 
     @property
@@ -118,6 +136,10 @@ class Hamiltonian:
     def include_dipole(self):
         return self.__include_dipole
 
+    @property
+    def operator(self):
+        return self.__operator
+
     def unitary(self, Ex, Ey, duration):
         # Return the sympy unitary matrix for evolution under this Hamiltonian.
         # Doesn't return the object in qutip-friendly format
@@ -126,26 +148,56 @@ class Hamiltonian:
 
         steps = np.linspace(0,duration,len(Ex) + 1)
 
+        U = sym.eye(int(2*self.s+1))
+
         for ii in range(len(Ex)):
             t1 = steps[ii]
             t2 = steps[ii+1]
 
             # Build the exponential that goes into the time-evolution operator
             # Only the controls hold time-dependence
-            int_H_dt = self.__operator * (t2 - t1)
-            pdb.set_trace()
-            int_H_dt += (Ex[ii] * self.__Sx_arr / self.omega_d) * (np.sin(self.omega_d * t2) - np.sin(self.omega_d * t1))
-            int_H_dt += -1 * (Ey[ii] * self.__Sy_arr / self.omega_d) * (np.cos(self.omega_d * t2) - np.cos(self.omega_d * t1))
+            #int_H_dt = self.__operator * (t2 - t1) # NOTE Need to fix, since dipole operators don't commute with laser
+            #op = self.__operator
+            #sx = self.__Sx_arr
+            #sy = self.__Sy_arr
+
+            for jj in range(len(self.__Sx_arr)):
+                if jj == 0:
+                    Sx_sum = self.__Sx_arr[jj]
+                    Sy_sum = self.__Sy_arr[jj]
+                else:
+                    Sx_sum += self.__Sx_arr[jj]
+                    Sy_sum += self.__Sy_arr[jj]
+
+            #int_H_dt += (Ex[ii] * Sx_sum / self.omega_d) * (np.sin(self.omega_d * t2) - np.sin(self.omega_d * t1))
+            #int_H_dt += -1 * (Ey[ii] * Sy_sum / self.omega_d) * (np.cos(self.omega_d * t2) - np.cos(self.omega_d * t1))
+            int_H_dt = (1/2) * (Ex[ii] * Sx_sum + Ey[ii] * Sy_sum) * (t2 - t1)
 
             # Get time-evolution operator over this single slice
-            Uii = (-int_H_dt).expm()
+            # Do this by doing the power series expansion of the matrix exponential (there has to be a better way than this)
+            # NOTE: In the future, assign a dimension of the matrix and use this instead
+            #Uii = np.identity(int(self.N * (2 * self.s + 1))).astype(object)
 
-            if ii == 0:
-                U = Uii
-            else:
-                U = U * Uii
+            Uii = sym.exp(-1j*int_H_dt)
+            U *= Uii
 
-            return U
+            #pdb.set_trace()
+
+            #exp_max = 10 # maximum power in the expansion
+            #for p in range(exp_max + 1):
+            #    print('hi alex')
+            #    pdb.set_trace()
+            #    Uii += np.linalg.matrix_power(-1j * int_H_dt, p) / factorial(p)
+
+            #Uii = #sym.exp(-int_H_dt)
+
+            #pdb.set_trace()
+            #if ii == 0:
+            #    U = Uii
+            #else:
+            #    U = U * Uii
+
+        return U
 
         #return [self.__operator, [np.sum(self.__Sx_arr), Hx_coeff], [np.sum(self.__Sy_arr), Hy_coeff]]
         #return self.__operator + self.Ex * np.sum(self.__Sx_arr) + self.Ey * np.sum(self.__Sy_arr)
@@ -178,7 +230,7 @@ class Hamiltonian:
                 else:
                     return Ey[int(np.floor(t / step))] * np.sin(self.omega_d * t)
 
-        return [self.__operator, [np.sum(self.__Sx_arr), Hx_coeff], [np.sum(self.__Sy_arr), Hy_coeff]]
+        return [self.__operator, [np.sum(self.__Sx_arr, axis=0), Hx_coeff], [np.sum(self.__Sy_arr, axis=0), Hy_coeff]]
         #return self.__operator + self.Ex * np.sum(self.__Sx_arr) + self.Ey * np.sum(self.__Sy_arr)
 
 def basis(N, val):
@@ -195,7 +247,7 @@ def basis(N, val):
     if (val >= N) or (val < 0):
         raise ValueError('Need 0 <= val < N.')
 
-    return np.identity(N)[val]
+    return sym.eye(N)[:,val]#np.identity(N)[val]
 
 def spin_operator(s, index):
     """ Function which returns a spin operator with a given spin and m.
@@ -212,8 +264,8 @@ def spin_operator(s, index):
     Cp = np.sqrt((s - m) * (s + m + 1))[1:]
     Cm = np.sqrt((s + m) * (s - m + 1))[:-1]
 
-    Sp = np.zeros((int(2*s+1),int(2*s+1)))
-    Sm = np.zeros((int(2*s+1),int(2*s+1)))
+    Sp = sym.zeros(int(2*s+1))#np.zeros((int(2*s+1),int(2*s+1)))
+    Sm = sym.zeros(int(2*s+1))#np.zeros((int(2*s+1),int(2*s+1)))
 
     # Iterate over each row (J+) or column (J-) and construct
     for ii in range(int(2*s)):
@@ -222,7 +274,12 @@ def spin_operator(s, index):
 
     Sx = (Sp + Sm) / 2
     Sy = (Sp - Sm) / (2j)
-    Sz = np.diag(m)
+    def Sz_elements(i,j):
+        if i == j:
+            return m[i]
+        else:
+            return 0
+    Sz = sym.Matrix(int(2*s+1), int(2*s+1), Sz_elements)#np.diag(m)
 
     if index == 'x':
         return Sx

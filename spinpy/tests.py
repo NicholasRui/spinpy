@@ -1,9 +1,24 @@
-from spinpy import objects, simulate
+from spinpy import objects as ob
+from spinpy import simulate as sim
 import numpy as np
 import matplotlib.pyplot as plt
 import qutip as qu
 import pdb
 
+def GRAPE_single_spin_flip(N=3, gamma=0.1):
+    """ Test function which attempts to find the optimal pulse to flip a single spin """
+    #N=3
+    s=0.5
+
+    H = ob.Hamiltonian(1, s, include_dipole=True, omega_d=2.8)
+    res = sim.GRAPE_pulse(H, 3, N, gamma=gamma, thres=1e-8)
+    #res = sim.GRAPE_pulse(H, 3, 1, gamma=gamma, thres=1e-8)
+
+    return res
+
+
+
+# NOTE: Marked for removal:
 def run_dynamics():
     """ Test function which simply runs a single s=0.5 driven spin """
     N=1
