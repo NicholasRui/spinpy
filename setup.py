@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(name='spinpy',
-      version='0.1',
+      version='0.3',
       description='A package to perform optimal control on spin ensembles.',
       author='Nicholas Z Rui',
       author_email='nrui@berkeley.edu',
