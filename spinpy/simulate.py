@@ -53,159 +53,14 @@ def simulate_dynamics_me(H, initial_state, duration, steps=200, mode='states'):
 
     return solver
 
-# This function is broken. Do not use.
-def num_GRAPE_pulse(H, duration, N, thres=1e-2):#initmag=10):
+def GRAPE_pulse(H, duration, N, gamma=0.01, thres=1e-8, init_state=None, autostop=False):
     """ Main function to optimize pulse with GRAPE.
     ** H, qu.qobj: Hamiltonian operator as a qutip qobj
     ** duration, float: Time length of the pulse
     ** N, int: Number of time slices to split Ex and Ey into
     ** gamma, float: Learning parameter, at each step, simulator jumps by gamma * del f
     ** thres, float: Tolerance threshold for final converged run.
-
-    == OUT ==
-
-    """
-    ################################################
-    # Setup
-    ################################################
-
-    # Construct basis vectors and collapse operators for Hilbert space
-    b_vec = []
-    e_ops = []
-
-    for ii in range(int(2*H.s+1)):
-        basis_state = ob.basis(int(2*H.s+1),ii)#qu.basis(int(2*H.s+1), ii)
-        for jj in range(H.N):
-            if jj == 0:
-                basis_vec = basis_state
-                collapse_op = np.outer(basis_state, basis_state)#basis_state * basis_state.dag()
-            else:
-                basis_vec = np.kron(basis_vec, basis_state)#qu.tensor(basis_vec, basis_state)
-                collapse_op = np.kron(collapse_op, np.outer(basis_state, basis_state))#qu.tensor(collapse_op, basis_state * basis_state.dag())
-        b_vec.append(basis_vec)
-        e_ops.append(collapse_op)
-
-    # Define options object to increase number of steps allowed
-    #options = qu.Options(nsteps=1e9) #some large number
-
-    ################################################
-    # Build desired unitary
-    ################################################
-
-    # Construct the desired unitary. For now, pick the one that swaps all of them down
-    for ii in range(H.N):
-        if ii == 0:
-            Uideal = ob.spin_operator(0.5,'x')#qu.sigmax()
-        else:
-            Uideal = np.kron(Uideal, ob.spin_operator(0.5,'x'))#qu.tensor(Uideal, qu.sigmax())
-    #Uideal = np.sum(-1 * e_ops[0] + np.sum([e_ops[ii+2] for ii in range(len(e_ops) - 2)]))
-
-    # Construct the ideal bra vectors
-    bras_ideal = [np.conj(np.transpose(Uideal * b_vec)) for ii in range(len(b_vec))] #[b_vec[ii].dag() * Uideal.dag() for ii in range(len(b_vec))]
-
-    ################################################
-    # Initialize guess and simulation arrays
-    ################################################
-
-    # Dumb initial guess, uniform driving with no normalization whatsoever
-    current_EpsX = 4 * np.pi * omega_d * np.ones(N) / (ge * Bz * duration)#initmag * np.ones(N)
-    current_EpsY = np.zeros(N)#0 * initmag * np.ones(N)
-
-    N_iter = 1
-    phi_list = [0] # Initialize list of cost-functions (with 0 starting it off)
-    EpsX_list = []
-    EpsY_list = []
-
-    # Define machine epsilon (for stepping)
-    eps = 1e-6#*np.finfo(float).eps#0.001#
-
-    ################################################
-    # The fun bit
-    ################################################
-    while (1 - phi_list[-1]) > thres:
-        start = time.time()
-
-        # Initialize list of partials with respect to Sx and Sy quadrature terms
-        dx_arr = np.array([])
-        dy_arr = np.array([])
-
-        phi = 0
-
-        for jj in range(len(b_vec)): # Iterate over basis vectors to find Ugrape|i>
-            # Record current EpsX, EpsY
-            EpsX_list.append(current_EpsX)
-            EpsY_list.append(current_EpsY)
-
-            # Evolve each individual basis vector
-            q = qu.mesolve(H.operator(current_EpsX, current_EpsY, duration), b_vec[jj],
-                           tlist=np.array([0, duration]), options=options)
-
-            # Check how close the output basis vector is to the desired state
-            final_state = q.states[-1]
-            phi += (bras_ideal[jj] * final_state)[0][0][0]
-
-        # Calculate generalized version of Eqn. 11 in Motzoi+2009 (cost function)
-        phi = np.abs(phi) ** 2 / len(b_vec) ** 2
-        phi_list.append(phi)
-        print('Iteration: {0}, PHI = {1}'.format(N_iter,phi))
-
-        for ii in range(len(current_EpsX)): # Perturb each Ex element to compute numerical gradient
-            phi_ds = 0
-            EpsX_test = current_EpsX
-            EpsX_test[ii] += eps
-
-            for jj in range(len(b_vec)):
-                q = qu.mesolve(H.operator(EpsX_test, current_EpsY, duration), b_vec[jj],
-                               tlist=np.array([0, duration]), options=options)
-
-                final_state = q.states[-1]
-                phi_ds += (bras_ideal[jj] * final_state)[0][0][0]
-
-            phi_ds = np.abs(phi_ds) ** 2 / len(b_vec) ** 2
-            dx_arr = np.append(dx_arr, (phi_ds - phi) / eps)
-
-        print('           X done'.format(N_iter,phi))
-
-        for ii in range(len(current_EpsY)): # Perturb each Ey element to compute numerical gradient
-            phi_ds = 0
-            EpsY_test = current_EpsY
-            EpsY_test[ii] += eps
-
-            for jj in range(len(b_vec)):
-                q = qu.mesolve(H.operator(current_EpsX, EpsY_test, duration), b_vec[jj],
-                               tlist=np.array([0, duration]), options=options)
-
-                final_state = q.states[-1]
-                phi_ds += (bras_ideal[jj] * final_state)[0][0][0]
-
-            phi_ds = np.abs(phi_ds) ** 2 / len(b_vec) ** 2
-            dy_arr = np.append(dy_arr, (phi_ds - phi) / eps)
-
-        print('           Y done'.format(N_iter,phi))
-        print('           Iter time: {0} s'.format(time.time() - start))
-
-        # Update guesses based on gradient
-        # NOTE: Should make sure this proportionality constant makes sense
-        current_EpsX += gamma * dx_arr
-        current_EpsY += gamma * dy_arr
-
-        print(current_EpsX)
-        print(current_EpsY)
-
-        N_iter += 1
-
-        if N_iter == 100:
-            pdb.set_trace()
-
-    return current_EpsX, current_EpsY
-
-def GRAPE_pulse(H, duration, N, gamma=0.01, thres=1e-8):
-    """ Main function to optimize pulse with GRAPE.
-    ** H, qu.qobj: Hamiltonian operator as a qutip qobj
-    ** duration, float: Time length of the pulse
-    ** N, int: Number of time slices to split Ex and Ey into
-    ** gamma, float: Learning parameter, at each step, simulator jumps by gamma * del f
-    ** thres, float: Tolerance threshold for final converged run.
+    ** autostop, bool: If True, terminate the run after 10000 iterations
 
     == OUT ==
 
@@ -239,15 +94,7 @@ def GRAPE_pulse(H, duration, N, gamma=0.01, thres=1e-8):
     U = H.unitary(X_control, Y_control, duration)
 
     # Create U lambda for convenience
-    U_lambda = sym.lambdify(np.append(X_control, Y_control), U)
-
-    # Calculate the analytical gradient in both quadratures
-    #delU_x = np.array([])
-    #delU_y = np.array([])
-    #
-    #for ii in range(N):
-    #    delU_x = np.append(delU_x, sym.diff(U, X_control[ii]))
-    #    delU_y = np.append(delU_y, sym.diff(U, Y_control[ii]))
+    U_lambda = sym.lambdify(np.append(X_control, Y_control), np.array(U))
 
     ################################################
     # Build desired unitary
@@ -259,7 +106,6 @@ def GRAPE_pulse(H, duration, N, gamma=0.01, thres=1e-8):
             Uideal = 2 * ob.spin_operator(0.5,'x')#qu.sigmax()
         else:
             Uideal = TensorProduct(Uideal, 2 * ob.spin_operator(0.5,'x'))#np.kron(Uideal, 2 * ob.spin_operator(0.5,'x'))#qu.tensor(Uideal, qu.sigmax())
-
     # Construct the ideal bra vectors
     bras_ideal = [sym.conjugate((Uideal * b_vec[ii]).T) for ii in range(len(b_vec))] #[b_vec[ii].dag() * Uideal.dag() for ii in range(len(b_vec))]
 
@@ -267,15 +113,35 @@ def GRAPE_pulse(H, duration, N, gamma=0.01, thres=1e-8):
     # Calculate fidelity function
     ################################################
     print('Calculating fidelity.')
-    F = 0
-    for ii in range(len(b_vec)):
-        # Calculate <n|Uideal * Ugrape|n>
-        term = (bras_ideal[ii] * U * b_vec[ii])[0,0]
-        print(ii+1)
-        F += term
+    if init_state == None:
+        F = 0
+        for ii in range(len(b_vec)):
+            # Calculate <n|Uideal * Ugrape|n>
+            term = (bras_ideal[ii] * U * b_vec[ii])[0,0]
+            print(ii+1)
+            F += term
 
-    # Get fidelity, convert to fast lambda function
-    F = sym.conjugate(F) * F / len(b_vec)**2
+        # Get fidelity, convert to fast lambda function
+        F = sym.conjugate(F) * F / len(b_vec)**2
+    else:
+        if init_state.pure:
+            desired_state = Uideal * init_state.vector
+            actual_state = U * init_state.vector
+
+            F = (sym.conjugate(desired_state.T) * actual_state)[0,0]
+            F = (sym.conjugate(F) * F)
+        else:
+            raise ValueError('Error: Mixed state currently does not work. Aborting.')
+            desired_state = Uideal * init_state.rho * sym.conjugate(Uideal.T)
+            actual_state = U * init_state.rho * sym.conjugate(U.T)
+
+            P, D = desired_state.diagonalize()
+            sqrt_desired =  P * D ** (1/2) * P ** -1
+            full = sqrt_desired * actual_state * sqrt_desired
+            pdb.set_trace()
+            P, D = full.diagonalize(); print('6')
+            F = sym.trace( D ** (1/2) ) ** 2; print('7')
+
     F_func = sym.lambdify(np.append(X_control, Y_control), F)
 
     # Calculate the analytical gradient in both quadratures
@@ -298,19 +164,25 @@ def GRAPE_pulse(H, duration, N, gamma=0.01, thres=1e-8):
     ################################################
     print('Initialize guess.')
     # Dumb initial guess, uniform driving with no normalization whatsoever
-    current_EpsX = 2 * np.pi * np.ones(N) / duration#(np.pi * np.ones(N) / duration)
+    current_EpsX = 2 * np.pi * np.ones(N) / duration
     current_EpsY = np.zeros(N)
 
     # Look at initial Uideal to see if it's reasonable
-    Uinit = sym.Matrix(U_lambda(*current_EpsX, *current_EpsY))
+    # Unfortunately, to evaluate, we need to iterate through all the values we want and cast
+    # them as default Python floats (instead of numpy.float64)
+    args = []
+    for ii in range(len(current_EpsX)):
+        args.append(float(current_EpsX[ii]))
+    for ii in range(len(current_EpsY)):
+        args.append(float(current_EpsY[ii]))
+
+    #Uinit = sym.Matrix(U_lambda(*current_EpsX.astype(float), *current_EpsY.astype(float)))
+    Uinit = sym.Matrix(U_lambda(*args))
 
     N_iter = 1
     F_list = [0] # Initialize list of fidelities
     EpsX_list = []
     EpsY_list = []
-
-    # Define machine epsilon (for stepping)
-    #eps = 1e-6#*np.finfo(float).eps#0.001#
 
     ################################################
     # The fun bit
@@ -326,19 +198,15 @@ def GRAPE_pulse(H, duration, N, gamma=0.01, thres=1e-8):
         start = time.time()
 
         # Numerically evaluate the fidelity and gradient at the trial point
-        control_args = np.append(current_EpsX, current_EpsY)
-
-        #param_dict = {}
-        #param_dict = {}
-        #for ii in range(len(X_control)):
-        #    param_dict[X_control[ii]] = current_EpsX[ii]
-        #    param_dict[Y_control[ii]] = current_EpsY[ii]
+        control_args = list(np.append(current_EpsX, current_EpsY))
+        for ii in range(len(control_args)):
+            control_args[ii] = complex(control_args[ii])
 
         # Calculate trial fidelity. Take real fidelity
         F_trial = np.real(F_func(*control_args))#F.xreplace(param_dict)
 
         # Append everything to arrays
-        F_list.append(F_trial)
+        F_list.append(float(F_trial))
         EpsX_list.append(np.copy(current_EpsX))
         EpsY_list.append(np.copy(current_EpsY))
         #F_trial = sym.N(F_trial)
@@ -348,15 +216,15 @@ def GRAPE_pulse(H, duration, N, gamma=0.01, thres=1e-8):
         delF_x_trial = np.array([])
         delF_y_trial = np.array([])
         for ii in range(len(delF_x)):
-            delF_x_trial = np.append(delF_x_trial, delF_x[ii](*control_args))#delF_x[ii].xreplace(param_dict))
-            delF_y_trial = np.append(delF_y_trial, delF_y[ii](*control_args))#delF_y[ii].xreplace(param_dict))
-
-        #if N_iter % 100 == 0:
-        #    pdb.set_trace()
+            delF_x_trial = np.append(delF_x_trial, delF_x[ii](*control_args))
+            delF_y_trial = np.append(delF_y_trial, delF_y[ii](*control_args))
 
         # Make a step, keeping only the real part of the gradient (there is a numerical artifact)
         current_EpsX += gamma * np.real(delF_x_trial)
         current_EpsY += gamma * np.real(delF_y_trial)
+
+        if (N_iter == 10000) & autostop:
+            break
 
         N_iter += 1
 
